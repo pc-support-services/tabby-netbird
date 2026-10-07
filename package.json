@@ -1,6 +1,6 @@
 {
   "name": "tabby-netbird",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Tabby NetBird - lists self-hosted NetBird peers as SSH connection profiles in Tabby, grouped and filtered by regex rules on peer name/NetBird groups/online status, with configurable name labels",
   "keywords": [
     "tabby-plugin",

@@ -17,6 +17,8 @@ export class NetBirdConfigProvider extends ConfigProvider {
             onlyGrouped: false,
             groupLabelExcludes: [],
             showOfflineSuffix: true,
+            defaultUser: '',
+            userOverrides: {},
         },
     }
 

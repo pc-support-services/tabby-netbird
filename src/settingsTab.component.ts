@@ -99,6 +99,23 @@ import {
         </div>
         <button (click)="addGroup()">+ Add group</button>
 
+        <h3>Usernames</h3>
+        <p class="hint">
+            Your machines don't share one login - set the username per peer here.
+            Keys match the peer's short name exactly as shown in the profile browser
+            (e.g. alex-gray). Case-insensitive. A blank user everywhere = Tabby prompts
+            for a username at connect (and remembers it per host after the first time).
+        </p>
+        <label class="row">
+            Default username for all peers (blank = prompt)
+            <input type="text" placeholder="e.g. administrator" [(ngModel)]="defaultUser" (change)="save()">
+        </label>
+        <label class="row col-row">
+            <textarea rows="6" placeholder="one per line:  peer-name = username&#10;e.g.&#10;alex-gray = administrator&#10;pip-watt-imac = pipwatt"
+                      [(ngModel)]="userOverridesText" (change)="saveUserOverrides()"></textarea>
+        </label>
+        <span class="secret-ref" *ngIf="userOverridesParseError" [class.invalid-text]="true">{{ userOverridesParseError }}</span>
+
         <h3>Rules</h3>
         <p class="hint">
             Evaluated top to bottom - later matching rules override earlier ones for any field
@@ -229,6 +246,9 @@ import {
             font-size: 0.85em;
         }
         input.invalid { border-color: #e55; background: rgba(238, 85, 85, 0.1); }
+        .invalid-text { color: #e55; }
+        .col-row { display: flex; }
+        .col-row textarea { flex: 1 1 auto; font-family: monospace; min-height: 6em; }
         .regex-tips {
             margin-top: 1.25em;
             padding: 0.6em 0.9em;
@@ -251,6 +271,9 @@ export class NetBirdSettingsTabComponent {
     groupLabelExcludes: string[] = []
     groupLabelExcludesText = ''
     showOfflineSuffix = true
+    defaultUser = ''
+    userOverridesText = ''
+    userOverridesParseError: string | null = null
 
     constructor (
         private config: ConfigService,
@@ -268,6 +291,41 @@ export class NetBirdSettingsTabComponent {
         this.groupLabelExcludes = store.groupLabelExcludes
         this.groupLabelExcludesText = this.groupLabelExcludes.join(', ')
         this.showOfflineSuffix = store.showOfflineSuffix
+        this.defaultUser = store.defaultUser ?? ''
+        this.userOverridesText = Object
+            .entries(store.userOverrides ?? {})
+            .map(([k, v]) => `${k} = ${v}`).join('\n')
+    }
+
+    /** Parse current textarea -> {key: user}. Sets userOverridesParseError; never throws. */
+    private _overridesFromText (): Record<string, string> {
+        const overrides: Record<string, string> = {}
+        this.userOverridesParseError = null
+        for (const line of this.userOverridesText.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed) { continue }
+            const eq = trimmed.indexOf('=')
+            if (eq < 1) {
+                this.userOverridesParseError = `Cannot parse: "${trimmed}" (expected peer-name = username)`
+                continue
+            }
+            const key = trimmed.slice(0, eq).trim()
+            const value = trimmed.slice(eq + 1).trim()
+            if (!key || !value) {
+                this.userOverridesParseError = `Empty key or user in: "${trimmed}"`
+                continue
+            }
+            overrides[key] = value
+        }
+        return overrides
+    }
+
+    saveUserOverrides (): void {
+        const overrides = this._overridesFromText()
+        if (!this.userOverridesParseError) {
+            this.config.store.netbird.userOverrides = overrides
+            this.config.save()
+        }
     }
 
     trackById (_index: number, item: { id: string }): string {
@@ -426,6 +484,10 @@ export class NetBirdSettingsTabComponent {
         store.onlyGrouped = this.onlyGrouped
         store.groupLabelExcludes = this.groupLabelExcludes
         store.showOfflineSuffix = this.showOfflineSuffix
+        store.defaultUser = this.defaultUser || undefined
+        if (!this.userOverridesParseError) {
+            store.userOverrides = this._overridesFromText()
+        }
         this.config.save()
     }
 

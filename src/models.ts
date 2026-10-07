@@ -46,6 +46,8 @@ export interface NetBirdSettings {
     onlyGrouped: boolean        // only list peers that have at least one group
     groupLabelExcludes: string[]   // group names never shown by showGroupsInName
     showOfflineSuffix: boolean  // append "(offline)" to offline peers' names
+    defaultUser?: string        // fallback username for peers with no rule/group/override user
+    userOverrides?: UserOverrides  // per-peer username overrides
 }
 
 export interface ResolvedPeerSettings {
@@ -55,6 +57,24 @@ export interface ResolvedPeerSettings {
     privateKey?: string
     password?: string
     showGroupsInName?: boolean
+}
+
+/**
+ * Per-host username overrides: { shortPeerName: user }. Keys match the peer's
+ * short label (dns_label without zone, hostname, or name - the same string the
+ * profile browser shows), case-insensitive. Example: { 'alex-gray': 'administrator' }.
+ */
+export type UserOverrides = Record<string, string>
+
+export function resolveUserOverride (peer: NetBirdPeer, overrides: UserOverrides): string | undefined {
+    const candidates = [peerDnsLabel(peer), peer.hostname, peer.name].filter(Boolean).map(c => c.toLowerCase())
+    for (const key of Object.keys(overrides ?? {})) {
+        const value = overrides[key]
+        if (!value) { continue }
+        const k = key.toLowerCase()
+        if (candidates.includes(k)) { return value }
+    }
+    return undefined
 }
 
 export const DEFAULT_GROUP = 'NetBird'
@@ -122,6 +142,10 @@ export function peerLabel (peer: NetBirdPeer): string {
     return peer.hostname || peer.name || ''
 }
 
+export function peerDnsLabel (peer: NetBirdPeer): string {
+    return (peer.dns_label || '').split('.')[0] || peer.hostname || peer.name || ''
+}
+
 /**
  * The peer's group names, minus any name in `excludes` (case-insensitive) -
  * used to build the "(...)" suffix that showGroupsInName appends.
@@ -152,7 +176,7 @@ export function regexError (pattern?: string): string | null {
  * (later matches override earlier ones, top to bottom), then falling back
  * to the resolved group's own defaults, then to hardcoded defaults.
  */
-export function applyRules (peer: NetBirdPeer, rules: NetBirdRule[], groups: NetBirdGroup[]): ResolvedPeerSettings {
+export function applyRules (peer: NetBirdPeer, rules: NetBirdRule[], groups: NetBirdGroup[], userOverrides?: UserOverrides, defaultUser?: string): ResolvedPeerSettings {
     const label = peerLabel(peer)
     const peerGroupNames = (peer.groups ?? []).map(g => g.name).join(',')
 
@@ -207,6 +231,15 @@ export function applyRules (peer: NetBirdPeer, rules: NetBirdRule[], groups: Net
             result.password ??= group.password
         }
         result.group ??= DEFAULT_GROUP
+    }
+
+    // Per-peer override (highest rule priority except explicit rule/group user),
+    // then global default - both only when nothing more specific was set.
+    if (!result.user) {
+        result.user = resolveUserOverride(peer, userOverrides ?? {})
+    }
+    if (!result.user && defaultUser) {
+        result.user = defaultUser
     }
 
     return result

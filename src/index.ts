@@ -68,7 +68,7 @@ export class NetBirdProfilesService extends ProfileProvider<SSHProfile> {
     }
 
     private async getProfilesInner (): Promise<PartialProfile<SSHProfile>[]> {
-        console.info('tabby-netbird: listing profiles (v0.1.1)')
+        console.info('tabby-netbird: listing profiles (v0.1.2)')
         const store = this.config.store.netbird
         const mgmtUrl = store.managementUrl
         if (!mgmtUrl) {
@@ -96,7 +96,7 @@ export class NetBirdProfilesService extends ProfileProvider<SSHProfile> {
 
         return Promise.all(peers
             .filter(peer => !onlyGrouped || (peer.groups?.length ?? 0) > 0)
-            .map(peer => ({ peer, settings: applyRules(peer, rules, groups) }))
+            .map(peer => ({ peer, settings: applyRules(peer, rules, groups, store.userOverrides, store.defaultUser) }))
             .filter(({ settings }) => !settings.excluded)
             .map(({ peer, settings }) => this.peerToProfile(peer, settings, naming)))
     }
