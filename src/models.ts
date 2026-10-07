@@ -1,17 +1,15 @@
-export interface TailscalePeer {
-    ID: string
-    DNSName: string
-    TailscaleIPs: string[]
-    Online: boolean
-    HostName: string
-    Tags?: string[]
+export interface NetBirdPeer {
+    id: string
+    name: string
+    dns_label: string
+    hostname: string
+    ip: string
+    connected: boolean
+    groups?: { id: string, name: string }[]
+    os?: string
 }
 
-export interface TailscaleStatus {
-    Peer: Record<string, TailscalePeer> | null
-}
-
-export interface TailscaleGroup {
+export interface NetBirdGroup {
     id: string
     name: string
     user?: string
@@ -22,29 +20,32 @@ export interface TailscaleGroup {
     password?: string
 }
 
-export interface TailscaleRule {
+export interface NetBirdRule {
     id: string
     description?: string    // free-text note, purely for your own reference - has no effect on matching
-    hostnameRegex?: string
-    tagRegex?: string
+    nameRegex?: string      // regex against peer name (falls back to hostname/dns label)
+    groupRegex?: string     // regex against the peer's comma-joined NetBird group names
     onlineStatus?: 'online' | 'offline'    // unset = match regardless of online status
     exclude?: boolean
-    group?: string      // references a TailscaleGroup.name; supports $1, $2... from hostnameRegex capture groups
+    group?: string      // references a NetBirdGroup.name; supports $1, $2... from nameRegex capture groups
     user?: string
     // Prefer a FileProvidersService reference (e.g. file://... or vault://...).
     // Legacy raw paths (without ://) are still accepted for backward compatibility.
     privateKey?: string
     // Opaque VaultService marker (e.g. vault:rule-password:...), never plaintext.
     password?: string
-    showTagsInName?: boolean    // append the peer's other tags (minus tagLabelExcludes) to its profile name
+    showGroupsInName?: boolean    // append the peer's other NetBird groups (minus excludes) to its profile name
 }
 
-export interface TailscaleConfig {
-    groups: TailscaleGroup[]
-    rules: TailscaleRule[]
-    onlyTagged: boolean
-    tagLabelExcludes: string[]    // tags never shown by showTagsInName (e.g. a marker tag you matched a rule on)
-    showOfflineSuffix: boolean    // append "(offline)" to offline peers' names
+export interface NetBirdSettings {
+    managementUrl: string       // e.g. https://netbird.example.com
+    patRef?: string             // opaque VaultService marker for the PAT (never plaintext)
+    patPlain?: string           // plaintext PAT, for setups without the Vault enabled
+    groups: NetBirdGroup[]
+    rules: NetBirdRule[]
+    onlyGrouped: boolean        // only list peers that have at least one group
+    groupLabelExcludes: string[]   // group names never shown by showGroupsInName
+    showOfflineSuffix: boolean  // append "(offline)" to offline peers' names
 }
 
 export interface ResolvedPeerSettings {
@@ -53,15 +54,17 @@ export interface ResolvedPeerSettings {
     user?: string
     privateKey?: string
     password?: string
-    showTagsInName?: boolean
+    showGroupsInName?: boolean
 }
 
-export const DEFAULT_GROUP = 'Tailscale'
-export const DEFAULT_USER = 'root'
-export const GROUP_PASSWORD_SECRET_TYPE = 'tailscale:group-password'
-export const RULE_PASSWORD_SECRET_TYPE = 'tailscale:rule-password'
+export const DEFAULT_GROUP = 'NetBird'
+export const DEFAULT_USER = undefined  // no default user - prompt at connect time
+export const GROUP_PASSWORD_SECRET_TYPE = 'netbird:group-password'
+export const RULE_PASSWORD_SECRET_TYPE = 'netbird:rule-password'
+export const PAT_SECRET_TYPE = 'netbird:pat'
 const GROUP_PASSWORD_REF_PREFIX = 'vault:group-password:'
 const RULE_PASSWORD_REF_PREFIX = 'vault:rule-password:'
+const PAT_REF_PREFIX = 'vault:pat:'
 
 export function newId (): string {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -76,6 +79,11 @@ export function groupPasswordRef (id: string): string {
 
 export function rulePasswordRef (id: string): string {
     return `${RULE_PASSWORD_REF_PREFIX}${id}`
+}
+
+export const patSecretRef = patRef
+export function patRef (): string {
+    return `${PAT_REF_PREFIX}${PAT_SECRET_TYPE}`
 }
 
 export function passwordSecretFromRef (ref?: string): { type: string, key: { id: string } } | null {
@@ -94,31 +102,35 @@ export function passwordSecretFromRef (ref?: string): { type: string, key: { id:
             key: { id: ref.substring(RULE_PASSWORD_REF_PREFIX.length) },
         }
     }
+    if (ref.startsWith(PAT_REF_PREFIX)) {
+        return {
+            type: PAT_SECRET_TYPE,
+            key: { id: PAT_SECRET_TYPE },
+        }
+    }
     return null
 }
 
 /**
- * The peer's Tailscale MagicDNS label (e.g. "oci-dev-services-playground-vm-1"),
- * stripped of the trailing dot and the tailnet domain suffix. Unlike
- * peer.HostName, this is guaranteed unique within the tailnet - Tailscale
- * itself appends a disambiguating "-1", "-2"... suffix here when multiple
- * peers register the same hostname.
+ * The peer's NetBird FQDN label (e.g. "myhost.netbird.selfhosted"),
+ * stripped at the first dot to the host part; falls back to the plain
+ * hostname or name reported by the management API.
  */
-export function peerDnsLabel (peer: TailscalePeer): string {
-    const dns = peer.DNSName?.replace(/\.$/, '')
-    return dns ? dns.split('.')[0] : (peer.HostName ?? '')
+export function peerLabel (peer: NetBirdPeer): string {
+    const fqdn = peer.dns_label || ''
+    if (fqdn) { return fqdn.split('.')[0] }
+    return peer.hostname || peer.name || ''
 }
 
 /**
- * The peer's tags with the "tag:" prefix stripped and any tag listed in
- * `excludes` removed (case-insensitive) - used to build the "(...)" suffix
- * that showTagsInName appends to a profile name.
+ * The peer's group names, minus any name in `excludes` (case-insensitive) -
+ * used to build the "(...)" suffix that showGroupsInName appends.
  */
-export function peerLabelTags (peer: TailscalePeer, excludes: string[]): string[] {
+export function peerLabelGroups (peer: NetBirdPeer, excludes: string[]): string[] {
     const excludeSet = new Set(excludes.map(t => t.toLowerCase()))
-    return (peer.Tags ?? [])
-        .map(t => t.replace(/^tag:/, ''))
-        .filter(t => !excludeSet.has(t.toLowerCase()))
+    return (peer.groups ?? [])
+        .map(g => g.name)
+        .filter(n => !excludeSet.has((n ?? '').toLowerCase()))
 }
 
 /**
@@ -140,34 +152,32 @@ export function regexError (pattern?: string): string | null {
  * (later matches override earlier ones, top to bottom), then falling back
  * to the resolved group's own defaults, then to hardcoded defaults.
  */
-export function applyRules (peer: TailscalePeer, rules: TailscaleRule[], groups: TailscaleGroup[]): ResolvedPeerSettings {
-    const hostname = peerDnsLabel(peer)
-    const tags = (peer.Tags ?? []).join(',')
+export function applyRules (peer: NetBirdPeer, rules: NetBirdRule[], groups: NetBirdGroup[]): ResolvedPeerSettings {
+    const label = peerLabel(peer)
+    const peerGroupNames = (peer.groups ?? []).map(g => g.name).join(',')
 
     const result: ResolvedPeerSettings = { excluded: false }
 
     for (const rule of rules) {
-        let hostnameMatch: RegExpExecArray | null = null
+        let nameMatch: RegExpExecArray | null = null
 
-        if (rule.onlineStatus === 'online' && !peer.Online) { continue }
-        if (rule.onlineStatus === 'offline' && peer.Online) { continue }
+        if (rule.onlineStatus === 'online' && !peer.connected) { continue }
+        if (rule.onlineStatus === 'offline' && peer.connected) { continue }
 
-        if (rule.hostnameRegex) {
+        if (rule.nameRegex) {
             try {
-                // Case-insensitive: DNS labels are lowercase regardless of
-                // the device's actual HostName casing.
-                hostnameMatch = new RegExp(rule.hostnameRegex, 'i').exec(hostname)
+                nameMatch = new RegExp(rule.nameRegex, 'i').exec(label)
             } catch (e) {
-                console.warn(`tabby-tailscale: rule ${rule.id} has an invalid hostname regex (${rule.hostnameRegex}) - skipping rule`, e)
+                console.warn(`tabby-netbird: rule ${rule.id} has an invalid name regex (${rule.nameRegex}) - skipping rule`, e)
                 continue
             }
-            if (!hostnameMatch) { continue }
+            if (!nameMatch) { continue }
         }
-        if (rule.tagRegex) {
+        if (rule.groupRegex) {
             try {
-                if (!new RegExp(rule.tagRegex, 'i').test(tags)) { continue }
+                if (!new RegExp(rule.groupRegex, 'i').test(peerGroupNames)) { continue }
             } catch (e) {
-                console.warn(`tabby-tailscale: rule ${rule.id} has an invalid tag regex (${rule.tagRegex}) - skipping rule`, e)
+                console.warn(`tabby-netbird: rule ${rule.id} has an invalid group regex (${rule.groupRegex}) - skipping rule`, e)
                 continue
             }
         }
@@ -181,12 +191,12 @@ export function applyRules (peer: TailscalePeer, rules: TailscaleRule[], groups:
         }
 
         if (rule.group) {
-            result.group = rule.group.replace(/\$(\d+)/g, (_, i) => hostnameMatch?.[+i] ?? '')
+            result.group = rule.group.replace(/$(\d+)/g, (_, i) => nameMatch?.[+i] ?? '')
         }
         if (rule.user) { result.user = rule.user }
         if (rule.privateKey) { result.privateKey = rule.privateKey }
         if (rule.password) { result.password = rule.password }
-        if (rule.showTagsInName !== undefined) { result.showTagsInName = rule.showTagsInName }
+        if (rule.showGroupsInName !== undefined) { result.showGroupsInName = rule.showGroupsInName }
     }
 
     if (!result.excluded) {
@@ -197,7 +207,6 @@ export function applyRules (peer: TailscalePeer, rules: TailscaleRule[], groups:
             result.password ??= group.password
         }
         result.group ??= DEFAULT_GROUP
-        result.user ??= DEFAULT_USER
     }
 
     return result

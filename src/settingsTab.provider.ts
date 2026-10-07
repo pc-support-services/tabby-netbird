@@ -1,14 +1,14 @@
 import { Injectable } from '@angular/core'
 import { SettingsTabProvider } from 'tabby-settings'
-import { TailscaleSettingsTabComponent } from './settingsTab.component'
+import { NetBirdSettingsTabComponent } from './settingsTab.component'
 
 @Injectable()
-export class TailscaleSettingsTabProvider extends SettingsTabProvider {
-    id = 'tailscale'
-    icon = 'share-alt'
-    title = 'Tailscale'
+export class NetBirdSettingsTabProvider extends SettingsTabProvider {
+    id = 'netbird'
+    icon = 'network-wired'
+    title = 'NetBird'
 
     getComponentType (): any {
-        return TailscaleSettingsTabComponent
+        return NetBirdSettingsTabComponent
     }
 }

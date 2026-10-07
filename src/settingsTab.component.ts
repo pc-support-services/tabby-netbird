@@ -3,53 +3,69 @@ import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { ConfigService, FileProvidersService, PromptModalComponent, VaultService } from 'tabby-core'
 import {
     GROUP_PASSWORD_SECRET_TYPE,
+    PAT_SECRET_TYPE,
     RULE_PASSWORD_SECRET_TYPE,
-    TailscaleGroup,
-    TailscaleRule,
+    NetBirdGroup,
+    NetBirdRule,
     groupPasswordRef,
     newId,
+    patSecretRef,
     regexError,
     rulePasswordRef,
 } from './models'
 
 @Component({
-    selector: 'tailscale-settings-tab',
+    selector: 'netbird-settings-tab',
     template: `
-    <div class="tailscale-settings">
+    <div class="netbird-settings">
         <div class="disclaimer">
-            <strong>Unofficial plugin.</strong> "Tabby Tailscale" is a third-party
-            Tabby plugin and is not made, endorsed, or supported by Tailscale Inc.
+            <strong>Unofficial plugin.</strong> "Tabby NetBird" is a third-party
+            Tabby plugin and is not made, endorsed, or supported by the NetBird project.
         </div>
 
         <p class="explainer">
-            This plugin runs <code>tailscale status --json</code> and turns your online peers
-            into SSH profiles, refreshed every time the Profile Browser is opened. Use
-            <strong>Rules</strong> to match peers by hostname and/or tag (regex) and decide what
-            happens to them: exclude them, assign them to a <strong>Group</strong>, and/or
-            override their username, password, or private key directly. Rules are evaluated
-            top to bottom - if more than one rule matches a peer, later rules override earlier
-            ones for whichever fields they set. Anything a rule leaves blank falls back to the
-            peer's assigned group, then to hardcoded defaults (user: root, no password, no
-            private key). Each group name also becomes its own visible, collapsible folder in
-            the Profile Browser.
+            This plugin fetches your peers from the self-hosted NetBird management API
+            (<code>GET /api/peers</code>) and turns them into SSH profiles, refreshed every time
+            the Profile Browser is opened. Use <strong>Rules</strong> to match peers by hostname
+            and/or NetBird group (regex) and decide what happens to them: exclude them, assign
+            them to a <strong>Group</strong>, and/or override their username, password, or private
+            key directly. Rules are evaluated top to bottom - if more than one rule matches a peer,
+            later rules override earlier ones for whichever fields they set. Anything a rule leaves
+            blank falls back to the peer's assigned group, then to hardcoded defaults (user: root,
+            no password, no private key). Each group name also becomes its own visible, collapsible
+            folder in the Profile Browser.
         </p>
 
-        <label class="only-tagged-toggle">
-            <input type="checkbox" [(ngModel)]="onlyTagged" (change)="save()">
-            Only list peers that have at least one tag
+        <label class="row">
+            Management server URL
+            <input type="text" placeholder="https://netbird.example.com" [(ngModel)]="managementUrl" (change)="save()">
         </label>
 
-        <label class="tag-label-excludes">
-            Tags to hide from name labels (comma-separated):
-            <input type="text" placeholder="e.g. prod" [(ngModel)]="tagLabelExcludesText" (change)="saveTagLabelExcludes()">
+        <div class="action-row">
+            <button (click)="setPat()" [disabled]="!vault.isEnabled()">Set API token (PAT)</button>
+            <button (click)="clearPat()" [disabled]="!vault.isEnabled() || !(patRef || patPlain)">Clear token</button>
+            <span class="secret-ref" *ngIf="patRef || patPlain">Token stored {{ patRef ? 'in Vault' : 'as plaintext (Vault disabled)' }}</span>
+        </div>
+        <p class="vault-hint" *ngIf="!vault.isEnabled()">
+            Enable Tabby's Vault (Settings → Vault) to store the management API token securely.
+            Without the Vault the token falls back to a plaintext config entry.
+        </p>
+
+        <label class="only-toggle">
+            <input type="checkbox" [(ngModel)]="onlyGrouped" (change)="save()">
+            Only list peers that have at least one group
+        </label>
+
+        <label class="row">
+            Groups to hide from name labels (comma-separated):
+            <input type="text" placeholder="e.g. All" [(ngModel)]="groupLabelExcludesText" (change)="saveGroupLabelExcludes()">
         </label>
         <p class="hint">
-            Used by a rule's "Show remaining tags in name" option below - every other tag
-            the peer has (e.g. its deployment site) gets appended to its profile name,
-            except the ones listed here.
+            Used by a rule's "Show remaining groups in name" option below - every other group
+            the peer is in gets appended to its profile name, except the ones listed here.
         </p>
 
-        <label class="only-tagged-toggle">
+        <label class="only-toggle">
             <input type="checkbox" [(ngModel)]="showOfflineSuffix" (change)="save()">
             Show "(offline)" in the name of offline peers
         </label>
@@ -67,7 +83,7 @@ import {
             <details class="details-panel">
                 <summary>Defaults</summary>
                 <div class="details-body">
-                    <input type="text" placeholder="User (default: root)" [(ngModel)]="group.user" (change)="save()">
+                    <input type="text" placeholder="User (blank = prompt at connect)" [(ngModel)]="group.user" (change)="save()">
                     <div class="action-row">
                         <button (click)="pickGroupPrivateKey(group)">Select private key</button>
                         <button (click)="clearGroupPrivateKey(group)" [disabled]="!group.privateKey">Clear key</button>
@@ -78,9 +94,6 @@ import {
                         <button (click)="clearGroupPassword(group)" [disabled]="!vault.isEnabled() || !group.password">Clear password</button>
                         <span class="secret-ref" *ngIf="group.password">Stored in Vault</span>
                     </div>
-                    <p class="vault-hint" *ngIf="!vault.isEnabled()">
-                        Password storage requires Tabby's Vault to be enabled in Settings → Vault.
-                    </p>
                 </div>
             </details>
         </div>
@@ -103,12 +116,12 @@ import {
                 <button (click)="removeRule(rule)">Remove</button>
             </div>
             <div class="rule-matchers">
-                <input type="text" placeholder="Hostname regex" [(ngModel)]="rule.hostnameRegex" (change)="save()"
-                       [class.invalid]="regexError(rule.hostnameRegex)"
-                       [title]="regexError(rule.hostnameRegex)">
-                <input type="text" placeholder="Tag regex" [(ngModel)]="rule.tagRegex" (change)="save()"
-                       [class.invalid]="regexError(rule.tagRegex)"
-                       [title]="regexError(rule.tagRegex)">
+                <input type="text" placeholder="Name regex" [(ngModel)]="rule.nameRegex" (change)="save()"
+                       [class.invalid]="regexError(rule.nameRegex)"
+                       [title]="regexError(rule.nameRegex)">
+                <input type="text" placeholder="Group regex" [(ngModel)]="rule.groupRegex" (change)="save()"
+                       [class.invalid]="regexError(rule.groupRegex)"
+                       [title]="regexError(rule.groupRegex)">
                 <select [(ngModel)]="rule.onlineStatus" (change)="save()" title="Filter by online status">
                     <option [ngValue]="undefined">Online: any</option>
                     <option [ngValue]="'online'">Online only</option>
@@ -137,12 +150,9 @@ import {
                         <span class="secret-ref" *ngIf="rule.password">Stored in Vault</span>
                     </div>
                     <label class="show-tags-toggle">
-                        <input type="checkbox" [(ngModel)]="rule.showTagsInName" (change)="save()">
-                        Show remaining tags in name
+                        <input type="checkbox" [(ngModel)]="rule.showGroupsInName" (change)="save()">
+                        Show remaining groups in name
                     </label>
-                    <p class="vault-hint" *ngIf="!vault.isEnabled()">
-                        Password storage requires Tabby's Vault to be enabled in Settings → Vault.
-                    </p>
                 </div>
             </details>
         </div>
@@ -154,16 +164,15 @@ import {
                 <li><code>prod</code> - contains "prod" (matching is substring-based, case-insensitive)</li>
                 <li><code>^(?!.*prod)</code> - does <em>not</em> contain "prod" (negative lookahead)</li>
                 <li><code>foo|bar</code> - contains "foo" OR "bar"</li>
-                <li><code>-\\d+$</code> - ends with a dash and a number (Tailscale's disambiguating suffix for duplicate hostnames)</li>
-                <li><code>^exact-name$</code> - matches only that exact hostname/DNS label</li>
+                <li><code>^exact-name$</code> - matches only that exact peer name</li>
                 <li><code>^prefix</code> / <code>suffix$</code> - starts with / ends with</li>
             </ul>
         </div>
     </div>
     `,
     styles: [`
-        .tailscale-settings h3 { margin-top: 1.5em; }
-        .tailscale-settings .hint { opacity: 0.7; font-size: 0.9em; }
+        .netbird-settings h3 { margin-top: 1.5em; }
+        .netbird-settings .hint { opacity: 0.7; font-size: 0.9em; }
         .disclaimer {
             background: rgba(255, 193, 7, 0.15);
             border: 1px solid rgba(255, 193, 7, 0.4);
@@ -172,9 +181,9 @@ import {
             margin-bottom: 1em;
         }
         .explainer { opacity: 0.85; line-height: 1.5; margin-bottom: 1em; }
-        .only-tagged-toggle { display: flex; align-items: center; gap: 0.4em; margin-bottom: 1em; }
-        .tag-label-excludes { display: flex; align-items: center; gap: 0.5em; }
-        .tag-label-excludes input { flex: 1 1 200px; max-width: 300px; }
+        .row { display: flex; align-items: center; gap: 0.5em; margin-bottom: 1em; }
+        .row input { flex: 1 1 240px; }
+        .only-toggle { display: flex; align-items: center; gap: 0.4em; margin-bottom: 1em; }
         .show-tags-toggle, .exclude-toggle {
             display: flex;
             align-items: center;
@@ -232,12 +241,15 @@ import {
         .regex-tips li { margin-bottom: 0.25em; }
     `],
 })
-export class TailscaleSettingsTabComponent {
-    groups: TailscaleGroup[] = []
-    rules: TailscaleRule[] = []
-    onlyTagged = false
-    tagLabelExcludes: string[] = []
-    tagLabelExcludesText = ''
+export class NetBirdSettingsTabComponent {
+    managementUrl = ''
+    patRef?: string
+    patPlain?: string
+    groups: NetBirdGroup[] = []
+    rules: NetBirdRule[] = []
+    onlyGrouped = false
+    groupLabelExcludes: string[] = []
+    groupLabelExcludesText = ''
     showOfflineSuffix = true
 
     constructor (
@@ -246,12 +258,16 @@ export class TailscaleSettingsTabComponent {
         private ngbModal: NgbModal,
         public vault: VaultService,
     ) {
-        this.groups = this.config.store.tailscale.groups
-        this.rules = this.config.store.tailscale.rules
-        this.onlyTagged = this.config.store.tailscale.onlyTagged
-        this.tagLabelExcludes = this.config.store.tailscale.tagLabelExcludes
-        this.tagLabelExcludesText = this.tagLabelExcludes.join(', ')
-        this.showOfflineSuffix = this.config.store.tailscale.showOfflineSuffix
+        const store = this.config.store.netbird
+        this.managementUrl = store.managementUrl
+        this.patRef = store.patRef
+        this.patPlain = store.patPlain
+        this.groups = store.groups
+        this.rules = store.rules
+        this.onlyGrouped = store.onlyGrouped
+        this.groupLabelExcludes = store.groupLabelExcludes
+        this.groupLabelExcludesText = this.groupLabelExcludes.join(', ')
+        this.showOfflineSuffix = store.showOfflineSuffix
     }
 
     trackById (_index: number, item: { id: string }): string {
@@ -262,12 +278,39 @@ export class TailscaleSettingsTabComponent {
         return regexError(pattern)
     }
 
+    async setPat (): Promise<void> {
+        await this.setPassword('NetBird management API token (PAT)', async token => {
+            if (this.vault.isEnabled()) {
+                await this.vault.addSecret({
+                    type: PAT_SECRET_TYPE,
+                    key: { id: 'pat' },
+                    value: token,
+                })
+                this.patRef = patSecretRef()
+                this.patPlain = undefined
+            } else {
+                this.patPlain = token
+                this.patRef = undefined
+            }
+            this.save()
+        })
+    }
+
+    async clearPat (): Promise<void> {
+        if (this.patRef) {
+            try { await this.vault.removeSecret(PAT_SECRET_TYPE, { id: 'pat' }) } catch { }
+        }
+        this.patRef = undefined
+        this.patPlain = undefined
+        this.save()
+    }
+
     addGroup (): void {
         this.groups.push({ id: newId(), name: 'New group' })
         this.save()
     }
 
-    removeGroup (group: TailscaleGroup): void {
+    removeGroup (group: NetBirdGroup): void {
         this.groups = this.groups.filter(g => g !== group)
         this.save()
     }
@@ -277,24 +320,24 @@ export class TailscaleSettingsTabComponent {
         this.save()
     }
 
-    removeRule (rule: TailscaleRule): void {
+    removeRule (rule: NetBirdRule): void {
         this.rules = this.rules.filter(r => r !== rule)
         this.save()
     }
 
     moveRuleUp (index: number): void {
         if (index <= 0) { return }
-        [this.rules[index - 1], this.rules[index]] = [this.rules[index], this.rules[index - 1]]
+        ;[this.rules[index - 1], this.rules[index]] = [this.rules[index], this.rules[index - 1]]
         this.save()
     }
 
     moveRuleDown (index: number): void {
         if (index >= this.rules.length - 1) { return }
-        [this.rules[index + 1], this.rules[index]] = [this.rules[index], this.rules[index + 1]]
+        ;[this.rules[index + 1], this.rules[index]] = [this.rules[index], this.rules[index + 1]]
         this.save()
     }
 
-    async pickGroupPrivateKey (group: TailscaleGroup): Promise<void> {
+    async pickGroupPrivateKey (group: NetBirdGroup): Promise<void> {
         const keyRef = await this.fileProviders.selectAndStoreFile(`private key for group ${group.name || 'group'}`).catch(() => null)
         if (keyRef) {
             group.privateKey = keyRef
@@ -302,12 +345,12 @@ export class TailscaleSettingsTabComponent {
         }
     }
 
-    clearGroupPrivateKey (group: TailscaleGroup): void {
+    clearGroupPrivateKey (group: NetBirdGroup): void {
         delete group.privateKey
         this.save()
     }
 
-    async setGroupPassword (group: TailscaleGroup): Promise<void> {
+    async setGroupPassword (group: NetBirdGroup): Promise<void> {
         await this.setPassword(`Password for group ${group.name || 'group'}`, async password => {
             await this.vault.addSecret({
                 type: GROUP_PASSWORD_SECRET_TYPE,
@@ -319,7 +362,7 @@ export class TailscaleSettingsTabComponent {
         })
     }
 
-    async clearGroupPassword (group: TailscaleGroup): Promise<void> {
+    async clearGroupPassword (group: NetBirdGroup): Promise<void> {
         try {
             await this.vault.removeSecret(GROUP_PASSWORD_SECRET_TYPE, { id: group.id })
             delete group.password
@@ -327,7 +370,7 @@ export class TailscaleSettingsTabComponent {
         } catch { }
     }
 
-    async pickRulePrivateKey (rule: TailscaleRule): Promise<void> {
+    async pickRulePrivateKey (rule: NetBirdRule): Promise<void> {
         const keyRef = await this.fileProviders.selectAndStoreFile(`private key for rule ${rule.description || rule.id}`).catch(() => null)
         if (keyRef) {
             rule.privateKey = keyRef
@@ -335,12 +378,12 @@ export class TailscaleSettingsTabComponent {
         }
     }
 
-    clearRulePrivateKey (rule: TailscaleRule): void {
+    clearRulePrivateKey (rule: NetBirdRule): void {
         delete rule.privateKey
         this.save()
     }
 
-    async setRulePassword (rule: TailscaleRule): Promise<void> {
+    async setRulePassword (rule: NetBirdRule): Promise<void> {
         await this.setPassword(`Password override for rule ${rule.description || rule.id}`, async password => {
             await this.vault.addSecret({
                 type: RULE_PASSWORD_SECRET_TYPE,
@@ -352,7 +395,7 @@ export class TailscaleSettingsTabComponent {
         })
     }
 
-    async clearRulePassword (rule: TailscaleRule): Promise<void> {
+    async clearRulePassword (rule: NetBirdRule): Promise<void> {
         try {
             await this.vault.removeSecret(RULE_PASSWORD_SECRET_TYPE, { id: rule.id })
             delete rule.password
@@ -364,28 +407,29 @@ export class TailscaleSettingsTabComponent {
         return keyRef.includes('://') ? keyRef : `legacy path: ${keyRef}`
     }
 
-    saveTagLabelExcludes (): void {
-        this.tagLabelExcludes = this.tagLabelExcludesText.split(',').map(t => t.trim()).filter(Boolean)
+    saveGroupLabelExcludes (): void {
+        this.groupLabelExcludes = this.groupLabelExcludesText.split(',').map(t => t.trim()).filter(Boolean)
         this.save()
     }
 
     save (): void {
-        // `config.store.tailscale` is a nested ConfigProxy (registered via
-        // TailscaleConfigProvider) - it must be mutated per-key, not replaced
+        // `config.store.netbird` is a nested ConfigProxy (registered via
+        // NetBirdConfigProvider) - it must be mutated per-key, not replaced
         // wholesale, or the write never reaches the underlying store that
         // gets persisted to config.yaml.
-        this.config.store.tailscale.groups = this.groups
-        this.config.store.tailscale.rules = this.rules
-        this.config.store.tailscale.onlyTagged = this.onlyTagged
-        this.config.store.tailscale.tagLabelExcludes = this.tagLabelExcludes
-        this.config.store.tailscale.showOfflineSuffix = this.showOfflineSuffix
+        const store = this.config.store.netbird
+        store.managementUrl = this.managementUrl
+        store.patRef = this.patRef
+        store.patPlain = this.patPlain
+        store.groups = this.groups
+        store.rules = this.rules
+        store.onlyGrouped = this.onlyGrouped
+        store.groupLabelExcludes = this.groupLabelExcludes
+        store.showOfflineSuffix = this.showOfflineSuffix
         this.config.save()
     }
 
-    private async setPassword (prompt: string, onSave: (password: string) => Promise<void>): Promise<void> {
-        if (!this.vault.isEnabled()) {
-            return
-        }
+    private async setPassword (prompt: string, onSave: (token: string) => Promise<void>): Promise<void> {
         const modal = this.ngbModal.open(PromptModalComponent)
         modal.componentInstance.prompt = prompt
         modal.componentInstance.password = true

@@ -1,29 +1,20 @@
 {
-  "name": "tabby-tailscale",
-  "version": "0.2.4",
-  "description": "Tabby Tailscale - lists Tailscale peers as SSH connection profiles in Tabby, grouped and filtered by regex rules on hostname/tags/online status, with configurable name labels",
+  "name": "tabby-netbird",
+  "version": "0.1.1",
+  "description": "Tabby NetBird - lists self-hosted NetBird peers as SSH connection profiles in Tabby, grouped and filtered by regex rules on peer name/NetBird groups/online status, with configurable name labels",
   "keywords": [
     "tabby-plugin",
-    "tailscale",
+    "netbird",
     "ssh"
   ],
-  "author": "Maximilian Botschen @ enamentis GmbH <maximilian.botschen@enamentis.de>",
+  "author": "PC Support Services",
   "license": "MIT",
   "main": "dist/index.js",
   "files": [
     "dist"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/enamentis/tabby-tailscale.git"
-  },
-  "bugs": {
-    "url": "https://github.com/enamentis/tabby-tailscale/issues"
-  },
-  "homepage": "https://github.com/enamentis/tabby-tailscale#readme",
   "scripts": {
-    "build": "webpack",
-    "prepublishOnly": "npm run build"
+    "build": "webpack"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
@@ -31,10 +22,11 @@
     "webpack-cli": "^5.0.0",
     "ts-loader": "^9.0.0",
     "@angular/core": "9.1.13",
+    "@angular/common": "9.1.13",
+    "@angular/forms": "9.1.13",
+    "@ng-bootstrap/ng-bootstrap": "^6.1.0",
     "tabby-core": "1.0.163",
-    "tabby-ssh": "1.0.163",
-    "tabby-settings": "1.0.163",
-    "tabby-terminal": "1.0.163"
+    "tabby-settings": "1.0.163"
   },
   "peerDependencies": {
     "tabby-core": "*",
